@@ -1,0 +1,4 @@
+class CdInformation < ActiveRecord::Base
+establish_connection "#{RAILS_ENV}"
+self.table_name = 'cd_information'
+end

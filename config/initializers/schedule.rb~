@@ -1,0 +1,593 @@
+# coding: utf-8
+require 'rufus-scheduler'
+require 'uri'
+require 'net/http'
+require 'xmlsimple'
+require 'nokogiri'
+HOST = "localhost"
+PORT = "8000"
+USER = "ormaster"
+PASSWD = "ormaster123"
+CONTENT_TYPE = "application/xml"
+Net::HTTP.version_1_2 
+require 'rexml/document'
+include REXML
+
+Today=Date.today.prev_day.to_s
+#Today="2014-05-25"
+patientID=7
+BODYpatientlst2v2 = <<EOF
+<data>
+	<patientlst2req type="record">
+		<Patient_ID_Information type="array">
+			<Patient_ID_Information_child type="record">
+				<Patient_ID type="string">7</Patient_ID>
+			</Patient_ID_Information_child>			
+		</Patient_ID_Information>
+	</patientlst2req>
+</data>
+EOF
+
+BODYmedicalgetv2 = <<EOF
+<data>
+	<medicalgetreq type="record">
+		<Patient_ID type="string">#{patientID}</Patient_ID>
+		
+	</medicalgetreq>
+</data>
+EOF
+
+BODYdiseasegetv2 = <<EOF
+<data>
+	<disease_inforeq type="record">
+		<Patient_ID type="string">#{patientID}</Patient_ID>
+	</disease_inforeq>
+</data>
+EOF
+
+
+BODYvisitptlstv2 = <<EOF
+<data>
+	<visitptlstreq type="record">
+		<Request_Number type="string">01</Request_Number>
+		<Visit_Date type="string">#{Today}</Visit_Date>
+
+	</visitptlstreq>
+</data>
+EOF
+
+BODYincomeinfv2 = <<EOF
+<data>
+        <private_objects type="record">
+                <Patient_ID type="string">#{patientID}</Patient_ID>
+        </private_objects>
+</data>
+EOF
+
+scheduler = Rufus::Scheduler.new
+
+scheduler.cron '00 00 * * *' do
+  callApi
+end
+
+def  callApi
+	visitpt=visitptlstv2
+	if !visitpt.blank?
+	listpatient=patientlst2v2(visitpt)
+	listpatient["patientlst2res"][0]["Patient_Information"][0]["Patient_Information_child"].each do |p|
+		patient=PatientInfo.new
+		patient.Patient_ID=p["Patient_ID"][0]["content"]
+		patient.WholeName=p["WholeName"][0]["content"]
+		patient.WholeName_inKana=p["WholeName_inKana"][0]["content"]
+		patient.BirthDate=p["BirthDate"][0]["content"]
+		patient.Sex=p["Sex"][0]["content"]
+		if !p["Home_Address_Information"].blank?
+				if !p["Home_Address_Information"][0]["Address_ZipCode"].blank?
+				patient.Address_ZipCode=p["Home_Address_Information"][0]["Address_ZipCode"][0]["content"]
+				end
+				if !p["Home_Address_Information"][0]["WholeAddress1"].blank?
+				patient.WholeAddress1=p["Home_Address_Information"][0]["WholeAddress1"][0]["content"]
+				end
+				if !p["Home_Address_Information"][0]["WholeAddress2"].blank?
+				patient.WholeAddress2=p["Home_Address_Information"][0]["WholeAddress2"][0]["content"]
+				end
+				if !p["Home_Address_Information"][0]["PhoneNumber1"].blank?
+				patient.PhoneNumber1=p["Home_Address_Information"][0]["PhoneNumber1"][0]["content"]
+				end
+				if !p["Home_Address_Information"][0]["PhoneNumber2"].blank?
+				patient.PhoneNumber2=p["Home_Address_Information"][0]["PhoneNumber2"][0]["content"]
+				end
+		end
+		patient.Created_Date=Time.now.strftime("%Y-%m-%d %H:%M:%S")
+		patient.Updated_Date=Time.now.strftime("%Y-%m-%d %H:%M:%S")
+		patient.save
+		patientExamination=PatientExamination.find_by_Patient_ID(p["Patient_ID"][0]["content"])
+		
+		insurance_Combination_Number=patientExamination.Insurance_Id
+				
+		if !p["PublicInsurance_Information"].blank?
+			 publicInsurance=Publicinsurance.new
+			 if !p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["PublicInsurance_Class"].blank?
+			 publicInsurance.PublicInsurance_Class=p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["PublicInsurance_Class"][0]["content"]
+			 end
+			 if !p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["PublicInsurance_Name"].blank?
+			 publicInsurance.PublicInsurance_Name=p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["PublicInsurance_Name"][0]["content"]
+			 end
+			 if !p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["PublicInsurance_Number"].blank?
+			 publicInsurance.PublicInsurer_Number=p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["PublicInsurer_Number"][0]["content"]
+			 end
+			 if !p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["PublicInsuredPerson_Number"].blank?
+			 publicInsurance.PublicInsuredPerson_Number=p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["PublicInsuredPerson_Number"][0]["content"]
+			 end
+			 if !p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["Certificate_IssuedDate"].blank?
+			 publicInsurance.Certificate_IssuedDate=p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["Certificate_IssuedDate"][0]["content"]
+			 end
+			 if !p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["Certificate_ExpiredDate"].blank?
+			 publicInsurance.Certificate_ExpiredDate=p["PublicInsurance_Information"][0]["PublicInsurance_Information_child"][0]["Certificate_ExpiredDate"][0]["content"]
+			 end
+			 publicInsurance.save
+			 pinsurance_id=Publicinsurance.last.PublicInsurance_id
+		else
+		pinsurance_id=0
+		end
+		
+			 insurance=Insurance.new
+			 insurance.Insurance_Combination_Number=insurance_Combination_Number
+			 insurance.PublicInsurance_id=pinsurance_id
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["InsuranceProvider_Class"].blank?
+			 insurance.InsuranceProvider_Class=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["InsuranceProvider_Class"][0]["content"]
+			 end
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["InsuranceProvider_WholeName"].blank?
+			 insurance.InsuranceProvider_WholeName=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["InsuranceProvider_WholeName"][0]["content"]
+			 end
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["InsuranceProvider_Number"].blank?
+			 insurance.InsuranceProvider_Number=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["InsuranceProvider_Number"][0]["content"]
+			 end
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["HealthInsuredPerson_Symbol"].blank?
+			 insurance.HealthInsuredPerson_Symbol=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["HealthInsuredPerson_Symbol"][0]["content"]
+			 end
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["HealthInsuredPerson_Number"].blank?
+			 insurance.HealthInsuredPerson_Number=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["HealthInsuredPerson_Number"][0]["content"]
+			 end
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["RelationToInsuredPerson"].blank?
+			 insurance.RelationToInsuredPerson=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["RelationToInsuredPerson"][0]["content"]
+			 end
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["HealthInsuredPerson_WholeName"].blank?
+			 insurance.HealthInsuredPerson_WholeName=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["HealthInsuredPerson_WholeName"][0]["content"]
+			 end
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["Certificate_StartDate"].blank?
+			 insurance.Certificate_StartDate=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["Certificate_StartDate"][0]["content"]
+			 end
+			 if !p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["Certificate_ExpiredDate"].blank?
+			 insurance.Certificate_ExpiredDate=p["HealthInsurance_Information"][0]["HealthInsurance_Information_child"][0]["Certificate_ExpiredDate"][0]["content"]
+			 end
+			insurance.save
+		patientExamination.Insurance_Id=Insurance.last.Insurance_Id
+		patientExamination.save
+		diseaseget=diseasegetv2(p["Patient_ID"][0]["content"])
+		if !diseaseget["disease_infores"][0]["Disease_Information"].blank?
+		diseaseget["disease_infores"][0]["Disease_Information"][0]["Disease_Information_child"].each do |d|
+		check=DiseaseSingle.find_by_Disease_Single(d["Disease_Single"][0]["Disease_Single_child"][0]["Disease_Single_Code"][0]["content"])
+		if check.blank?
+		   diseaseSingle=DiseaseSingle.new
+		   diseaseSingle.Disease_Single=d["Disease_Single"][0]["Disease_Single_child"][0]["Disease_Single_Code"][0]["content"]
+		   diseaseSingle.Disease_Single_Name=d["Disease_Single"][0]["Disease_Single_child"][0]["Disease_Single_Name"][0]["content"]
+                   if !d["Disease_Single"][0]["Disease_Single_child"][0]["Disease_Single_Condition"].blank?
+		   diseaseSingle.Disease_Single_Condition=d["Disease_Single"][0]["Disease_Single_child"][0]["Disease_Single_Condition"][0]["content"]
+		   end
+		   diseaseSingle.save
+		end
+		diseasePatient=DiseasePatient.new
+		diseasePatient.Disease_Single=d["Disease_Single"][0]["Disease_Single_child"][0]["Disease_Single_Code"][0]["content"]
+		diseasePatient.Disease_Name=d["Disease_Name"][0]["content"]
+		diseasePatient.Patient_ID=p["Patient_ID"][0]["content"]
+                   if !d["Department_Code"].blank?
+		   diseasePatient.Department_Code=d["Department_Code"][0]["content"]
+		   end
+                   if !d["Disease_InOut"].blank?
+		   diseasePatient.Disease_InOut=d["Disease_InOut"][0]["content"]
+		   end
+                   if !d["Disease_Category"].blank?
+		   diseasePatient.Disease_Category=d["Disease_Category"][0]["content"]
+		   end
+                   if !d["Disease_SuspectedFlag"].blank?
+		   diseasePatient.Disease_SuspectedFlag=d["Disease_SuspectedFlag"][0]["content"]
+		   end
+                   if !d["Disease_StartDate"].blank?
+		   diseasePatient.Disease_StartDate=d["Disease_StartDate"][0]["content"]
+		   end
+                   if !d["Disease_Supplement_Name"].blank?
+		   diseasePatient.Disease_Supplement_Name=d["Disease_Supplement_Name"][0]["content"]
+		   end
+                   if !d["Disease_EndDate"].blank?
+		   diseasePatient.Disease_EndDate=d["Disease_EndDate"][0]["content"]
+		   end
+                   if !d["Disease_OutCome"].blank?
+		   diseasePatient.Disease_OutComee=d["Disease_OutCome"][0]["content"]
+		   end
+                   if !d["Insurance_Disease"].blank?
+		   diseasePatient.Insurance_Disease=d["Insurance_Disease"][0]["content"]
+		   end
+                   if !d["Disease_Class"].blank?
+		   diseasePatient.Disease_Class=d["Disease_Class"][0]["content"]
+		   end	 	
+                   if !d["InOut"].blank?
+		   diseasePatient.InOut=d["InOut"][0]["content"]
+		   end
+		diseasePatient.save
+		end
+		end
+
+	medicalget=medicalgetv2(p["Patient_ID"][0]["content"])
+	medicalget["medicalget03res"][0]["Medical_List_Information"][0]["Medical_List_Information_child"].each do |m|
+		
+	check=Medical.find_by_Medical_Class(m["Medical_Class"][0]["content"])
+	if check.blank?
+	medical=Medical.new
+	medical.Medical_Class=m["Medical_Class"][0]["content"]
+	medical.Medical_Class_Name=m["Medical_Class_Name"][0]["content"]
+	medical.Medical_Class_code=m["Medical_Class_code"][0]["content"]
+	medical.save
+	end
+	check=Medication.find_by_Medication_Code(m["Medication_Code"][0]["content"])
+	if check.blank?
+	medication=Medication.new
+	medication.Medication_Code=m["Medication_Code"][0]["content"]
+	medication.Medication_Name=m["Medication_Name"][0]["content"]
+	medication.save
+	end
+	medicalmedication=MedicalMedication.new
+	medicalmedication.Medical_Class=m["Medical_Class"][0]["content"]
+	medicalmedication.Medication_Code=m["Medication_Code"][0]["content"]
+	medicalmedication.Patient_ID=p["Patient_ID"][0]["content"]
+	if !m["Perform_Day_Information"].blank?
+	medicalmedication.Perform_Day=m["Perform_Day_Information"][0]["Perform_Day_Information_child"][0]["Perform_Day"][0]["content"]
+	medicalmedication.Perform_Day_Number=m["Perform_Day_Information"][0]["Perform_Day_Information_child"][0]["Perform_Day_Number"][0]["content"]
+	end
+	medicalmedication.Perform_Total_Number=m["Perform_Total_Number"][0]["content"]
+	medicalmedication.Perform_Calendar=m["Perform_Calendar"][0]["content"]
+	medicalmedication.save
+	end
+
+	incomeinfv=incomeinfv2(p["Patient_ID"][0]["content"])
+	incomeinf=incomeinfv["private_objects"][0]["Income_Information"][0]["Income_Information_child"][0]
+	cdInformation=CdInformation.new
+	cdInformation.Patient_ID=p["Patient_ID"][0]["content"]
+	cdInformation.Perform_Date=incomeinf["Perform_Date"][0]["content"]
+	cdInformation.InOut=incomeinf["InOut"][0]["content"]
+	cdInformation.Invoice_Number=incomeinf["Invoice_Number"][0]["content"]
+	cdInformation.Ac_Money=incomeinf["Cd_Information"][0]["Ac_Money"][0]["content"]
+	cdInformation.Ic_Money=incomeinf["Cd_Information"][0]["Ic_Money"][0]["content"]
+	cdInformation.Ai_Money=incomeinf["Cd_Information"][0]["Ai_Money"][0]["content"]
+	cdInformation.Oe_Money=incomeinf["Cd_Information"][0]["Oe_Money"][0]["content"]
+	cdInformation.save
+	end
+	#diseasegetv2
+	#medicalgetv2
+	#incomeinfv2	
+	end
+end
+
+
+
+def patientgetv2(ptid)
+
+req = Net::HTTP::Get.new("/api01rv2/patientgetv2?id=#{ptid}")
+
+req.basic_auth(USER, PASSWD)
+
+Net::HTTP.start(HOST, PORT) { |http|
+  res = http.request(req)
+  data = XmlSimple.xml_in(res.body)
+  return data
+}
+end
+
+
+
+def patientlst2v2(visitpt)
+req = Net::HTTP::Post.new("/api01rv2/patientlst2v2?class=01")
+# class :01 謖・ｮ壽ぅ閠・ュ蝣ｱ蜿門ｾ・#
+#
+
+    
+
+
+req.content_length = BODYpatientlst2v2.size
+req.content_type = CONTENT_TYPE
+#req.body =BODYpatientlst2v2
+data="<data>\n\t<patientlst2req type=\"record\">\n\t\t<Patient_ID_Information type=\"array\">\n\t\t\t"
+visitpt.each do |patientID|
+data = data +"<Patient_ID_Information_child type=\"record\">\n\t\t\t\t<Patient_ID type=\"string\">#{patientID}</Patient_ID>\n\t\t\t</Patient_ID_Information_child>\t\t\t\n\t\t"
+end
+
+data=data +"</Patient_ID_Information>\n\t</patientlst2req>\n</data>\n"
+req.body =data
+req.basic_auth(USER, PASSWD)
+  puts req.body
+
+Net::HTTP.start(HOST, PORT) {|http|
+  res = http.request(req)
+  data = XmlSimple.xml_in(res.body)
+  return data
+}
+
+
+end
+
+def medicalgetv2(patientID)
+req = Net::HTTP::Post.new("/api01rv2/medicalgetv2?class=03")
+# class :01 蜿苓ｨｺ螻･豁ｴ蜿門ｾ・# class :02 譌･蛻･險ｺ逋よュ蝣ｱ蜿門ｾ・# class :03 譛亥挨險ｺ逋よュ蝣ｱ蜿門ｾ・#
+#
+
+
+
+req.content_length = BODYmedicalgetv2.size
+req.content_type = CONTENT_TYPE
+req.body = <<EOF
+<data>
+	<medicalgetreq type="record">
+		<Patient_ID type="string">#{patientID}</Patient_ID>
+		
+	</medicalgetreq>
+</data>
+EOF
+req.basic_auth(USER, PASSWD)
+  puts req.body
+
+Net::HTTP.start(HOST, PORT) {|http|
+  res = http.request(req)
+  data = XmlSimple.xml_in(res.body)
+  return data
+}
+
+
+end
+
+
+def diseasegetv2(patientID)
+
+req = Net::HTTP::Post.new("/api01rv2/diseasegetv2?class=01")
+# class :01 謔｣閠・羅蜷肴ュ蝣ｱ蜿門ｾ・#
+#
+
+req.content_length = BODYdiseasegetv2.size
+req.content_type = CONTENT_TYPE
+req.body = <<EOF
+<data>
+	<disease_inforeq type="record">
+		<Patient_ID type="string">#{patientID}</Patient_ID>
+	</disease_inforeq>
+</data>
+EOF
+req.basic_auth(USER, PASSWD)
+  puts req.body
+
+Net::HTTP.start(HOST, PORT) {|http|
+  res = http.request(req)
+  puts res.body
+  data = XmlSimple.xml_in(res.body)
+
+  return data
+}
+
+
+end
+
+
+def visitptlstv2
+req = Net::HTTP::Post.new("/api01rv2/visitptlstv2")
+# Request_Number :01 譚･髯｢譌･縺ｮ蜿苓ｨｺ螻･豁ｴ蜿門ｾ・# Request_Number :02 譚･髯｢蟷ｴ譛医・蜿苓ｨｺ螻･豁ｴ蜿門ｾ・#
+# 1.譚･髯｢譌･莉・       Visit_Date      (IMPLIED)
+# 2.險ｺ逋らｧ代さ繝ｼ繝・   Department_Code (REQUIRED class=02縺ｮ縺ｿ)
+#
+# REQUIRED : 蠢・・  IMPLIED : 莉ｻ諢・#
+
+
+req.content_length = BODYvisitptlstv2.size
+req.content_type = CONTENT_TYPE
+req.body = BODYvisitptlstv2
+req.basic_auth(USER, PASSWD)
+  puts req.body
+
+Net::HTTP.start(HOST, PORT) {|http|
+  res = http.request(req)
+  data = XmlSimple.xml_in(res.body)
+  result = Array.new
+    if !data["visitptlst01res"][0]["Visit_List_Information"].blank? 
+	visitdate=data["visitptlst01res"][0]["Visit_Date"][0]["content"]
+ 	if data["visitptlst01res"][0]["Visit_List_Information"][0]["Visit_List_Information_child"].count > 0
+		data["visitptlst01res"][0]["Visit_List_Information"][0]["Visit_List_Information_child"].each do |p|
+	       	 a=PatientExamination.new
+		 a.Patient_ID=p["Patient_Information"][0]["Patient_ID"][0]["content"]
+		 a.Visit_Date=visitdate
+		 a.Sequential_Number=p["Sequential_Number"][0]["content"]
+		 a.Department_Code=p["Department_Code"][0]["content"]
+		 a.Physician_Code=p["Physician_Code"][0]["content"]
+		 a.Insurance_Id=p["Insurance_Combination_Number"][0]["content"]
+		 a.Voucher_Number =p["Voucher_Number"][0]["content"]
+		 physician=Physician.find_by_Physician_Code(a.Physician_Code)
+	 	 department=Department.find_by_Department_Code(a.Department_Code)
+		 	 if department.blank?
+			 department=Department.new
+			 department.Department_Code=a.Department_Code
+			 department.Department_Name=p["Department_Name"][0]["content"]	
+			 department.save
+			 end
+			 if physician.blank?
+			 physician=Physician.new
+			 physician.Physician_Code=a.Physician_Code
+			 physician.Physician_WholeName=p["Physician_WholeName"][0]["content"]	
+			 physician.save
+			 end
+		 
+		 a.save	
+ 		 result.push a.Patient_ID
+	 	 end
+	end
+    end
+  return result
+}
+
+
+
+end
+
+def incomeinfv2(patientID)
+req = Net::HTTP::Post.new("/api01rv2/incomeinfv2")
+#
+# 1.患者番号    Patient_ID      (REQUIRED)
+# 2.診療日      Perform_Date    (IMPLIED)
+# 3.診療月      Perform_Month   (IMPLIED)
+# 4.診療年      Perform_Year    (IMPLIED)
+#
+# REQUIRED : 必須   IMPLIED : 任意
+#
+
+
+req.content_length = BODYincomeinfv2.size
+req.content_type = CONTENT_TYPE
+req.body = <<EOF
+<data>
+        <private_objects type="record">
+                <Patient_ID type="string">#{patientID}</Patient_ID>
+        </private_objects>
+</data>
+EOF
+req.basic_auth(USER, PASSWD)
+ 
+
+Net::HTTP.start(HOST, PORT) {|http|
+  res = http.request(req)
+  puts res.body
+  data = XmlSimple.xml_in(res.body)
+  return data
+} 
+
+end
+
+def getPatientNumber
+
+    prev_day=Date.today.prev_day
+    month=prev_day.month
+    year=prev_day.year
+    patientExamination=PatientExamination.where(:Visit_Date=> prev_day.to_s)
+	if patientExamination.count > 0
+	    patientExaminationn=patientExamination.size
+	    patientNumber=PatientNumber.where(:year=> year , :month=> month )
+	    pnatientQuestionaire=PatientQuestionaire.where("date LIKE :date AND is_suggested = 1 ", :date=> "#{prev_day.to_s}%").size
+	    pnatientMonshin=PatientMonshin.where("date LIKE :date AND is_introduced = 1 ", :date=> "#{prev_day.to_s}%").size
+	    if patientNumber.count == 0
+		patientNumber=PatientNumber.new 
+		patientNumber.year = year
+		patientNumber.month = month
+		patientNumber.sum_patient_all = patientExaminationn
+		patientNumber.sum_patient_suggested = pnatientQuestionaire
+		patientNumber.sum_patient_introduced = pnatientMonshin	
+		patientNumber.sum_patient_other=patientNumber.sum_patient_all - patientNumber.sum_patient_suggested - patientNumber.sum_patient_introduced
+		if patientNumber.sum_patient_other < 0
+		patientNumber.sum_patient_other=0
+		end
+		patientNumber.rate_patient_introduced  = (100 * pnatientMonshin)/patientExaminationn
+		patientNumber.save
+	    else
+		patientNumber[0].sum_patient_all = patientNumber[0].sum_patient_all + patientExaminationn
+		patientNumber[0].sum_patient_suggested=patientNumber[0].sum_patient_suggested + pnatientQuestionaire
+		patientNumber[0].sum_patient_introduced=patientNumber[0].sum_patient_introduced + pnatientMonshin
+		patientNumber[0].sum_patient_other=patientNumber[0].sum_patient_all - patientNumber[0].sum_patient_suggested - patientNumber[0].sum_patient_introduced
+		if patientNumber[0].sum_patient_other < 0
+		patientNumber[0].sum_patient_other=0
+		end
+		patientNumber[0].rate_patient_introduced= (100 * patientNumber[0].sum_patient_introduced )/patientNumber[0].sum_patient_all 
+		patientNumber[0].save
+	    end
+	end
+end
+
+
+
+
+def getPatientPayment
+    prev_day=Date.today.prev_day
+    month=prev_day.month
+    year=prev_day.year
+    cdInformation=CdInformation.where(:Perform_Date=> prev_day)
+	if !cdInformation.blank?
+		patientpayment=PatientPayment.where(:year=> year , :month=> month )
+		    msum=0
+		    cdInformation.each do |cd|
+		    msum = msum + cd.Ac_Money
+		    end
+		   
+		    patientQuestionaire=PatientQuestionaire.where("date LIKE :date AND is_suggested= 1 ", :date=> "#{prev_day.to_s}%")
+		    msuggested=0
+		    if patientQuestionaire.size > 0
+			    result = Array.new
+			    patientQuestionaire.each  do |pq|
+			
+				result.push pq.patient_id
+			    end
+
+			    if !result.blank?
+		    		   cdinformation= CdInformation.where( :Perform_Date=> "#{prev_day.to_s}", :Patient_ID => result)
+
+				   if cdinformation.size > 0
+					   cdinformation.each do |cdi|
+						msuggested = msuggested + cdi.Ac_Money
+					   end
+				   end
+			    end
+		    end
+
+
+		    patientMonshin=PatientMonshin.where("date LIKE :date AND is_introduced = 1 ", :date=> "#{prev_day.to_s}%")
+		    mintroduced=0
+		    if patientMonshin.size > 0
+			    result = Array.new
+			    patientQuestionaire.each  do |pq|
+			
+				result.push pq.patient_id
+			    end
+
+			    if !result.blank?
+		    		   cdinformation= CdInformation.where( :Perform_Date=> "#{prev_day.to_s}", :Patient_ID => result)
+
+				   if cdinformation.size > 0
+					   cdinformation.each  do |cdi|
+						mintroduced = mintroduced + cdi.Ac_Money
+					   end
+				   end
+			    end
+		    end
+
+
+
+
+		    if patientpayment.size == 0
+			patientPayment=PatientPayment.new 
+			patientPayment.year=year
+			patientPayment.month=month
+			patientPayment.sum_patient_payment_all = msum
+			patientPayment.sum_patient_payment_suggested = msuggested	
+			patientPayment.sum_patient_payment_introduced= mintroduced	
+			patientPayment.sum_patient_payment_other = msum - msuggested - mintroduced
+			if patientPayment.sum_patient_payment_other < 0
+			patientPayment.sum_patient_payment_other=0
+			end
+			patientPayment.rate_patient_payment_introduced=(mintroduced * 100)/msum
+			patientPayment.save	
+		    else
+			patientpayment[0].sum_patient_payment_all = patientpayment[0].sum_patient_payment_all + msum
+			patientpayment[0].sum_patient_payment_suggested = patientpayment[0].sum_patient_payment_suggested + msuggested	
+			patientpayment[0].sum_patient_payment_introduced=patientpayment[0].sum_patient_payment_introduced + mintroduced	
+			patientpayment[0].sum_patient_payment_other=patientpayment[0].sum_patient_payment_all - patientpayment[0].sum_patient_payment_suggested - patientpayment[0].sum_patient_payment_introduced
+			if patientpayment[0].sum_patient_payment_other < 0
+			patientpayment[0].sum_patient_payment_other=0
+			end
+			patientpayment[0].rate_patient_payment_introduced=(100*patientpayment[0].sum_patient_payment_introduced)/patientpayment[0].sum_patient_payment_all
+			patientpayment[0].save
+		    end
+
+	end
+end
+

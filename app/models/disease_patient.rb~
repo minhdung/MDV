@@ -1,0 +1,4 @@
+class DiseasePatient < ActiveRecord::Base
+establish_connection "#{RAILS_ENV}"
+self.table_name = 'disease_patient'
+end
